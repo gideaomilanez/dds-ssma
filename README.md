@@ -1,6 +1,6 @@
-# 📊 Análise de DDS (SSMA) – Streamlit
+# 📊 Análise de DDS (SSMA)
 
-Aplicativo em **Python + Streamlit** para análise de registros de **DDS (Diálogo Diário de Segurança)** a partir da planilha de respostas do formulário de **SSMA**.
+Aplicativo em **Python** para análise de registros de **DDS (Diálogo Diário de Segurança)** a partir da planilha de respostas do formulário de **SSMA**.
 
 ## ✨ Funcionalidades
 
