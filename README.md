@@ -1,4 +1,4 @@
-# 📊 Análise de DDS (SSMA)
+# 📊 Análise de DDS
 
 Aplicativo em **Python** para análise de registros de **DDS (Diálogo Diário de Segurança)** a partir da planilha de respostas do formulário de **SSMA**.
 
