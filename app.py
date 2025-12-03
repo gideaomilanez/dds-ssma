@@ -10,13 +10,19 @@ filtra os registros de DDS e gera automaticamente gráficos de:
 4) Participação dos supervisores por unidade
 5) Percentual de DDS com supervisor presente por unidade
 6) Percentual de DDS com supervisor presente por regional
+7) Dias possíveis de DDS x realizados por unidade (barras sobrepostas)
+8) Proporção de DDS realizados / dias possíveis por unidade
 
 Regras importantes:
 - Considera, no máximo, 1 DDS por dia/unidade (mantém o último registro do dia).
 - Ignora registros da unidade de trabalho "COMERCIAL".
+- Dias possíveis:
+    * Log Arte / ArtePeças: segunda a sexta
+    * Demais unidades (usinas): segunda a sábado
 """
 
 import io
+import unicodedata
 from datetime import date
 from typing import Dict, Tuple, Optional
 
@@ -40,13 +46,12 @@ st.markdown(
 Este app lê a planilha de **SSMA**, filtra os registros de **DDS** 
 e gera automaticamente os principais gráficos de presença de **regionais** e **supervisores**.
 
-> Obs.: A o setor **COMERCIAL** é automaticamente filtrado da análise.
+> Obs.: O setor **COMERCIAL** é automaticamente filtrado da análise.
 """
 )
 
 # ============================================================
 # CONFIGURAÇÃO: nomes EXATOS das colunas na planilha
-# (ajuste aqui se o formulário for alterado)
 # ============================================================
 COL_FORMULARIO = "SELECIONE SEU FORMULÁRIO"
 VALOR_DDS = "REALIZAÇÃO DE DDS - DIÁLOGO DIÁRIO DE SEGURANÇA"
@@ -58,7 +63,36 @@ COL_UNIDADE = "UNIDADE DE TRABALHO"
 COL_PRES_REGIONAL = "a. PRESENÇA REGIONAL"
 COL_PRES_SUPERVISOR = "a. PRESENÇA SUPERVISOR"
 
-BAR_COLOR = "#082951"  # cor padrão das barras
+BAR_COLOR = "#082951"   # cor padrão das barras
+BAR_RED = "#c0392b"     # cor para destaque negativo
+BAR_GRAY = "#d3d3d3"    # cinza claro para "dias possíveis"
+
+
+# ============================================================
+# Funções auxiliares gerais
+# ============================================================
+def normalizar_texto(txt: str) -> str:
+    """Remove acentos, deixa maiúsculo e tira espaços extras."""
+    if not isinstance(txt, str):
+        return ""
+    txt = txt.strip()
+    txt = unicodedata.normalize("NFD", txt)
+    txt = "".join(ch for ch in txt if unicodedata.category(ch) != "Mn")
+    return txt.upper()
+
+
+def unidade_e_logarte_ou_artepecas(unidade: str) -> bool:
+    """
+    Retorna True se a unidade for Log Arte / ArtePeças (regime seg-sex),
+    False caso contrário (regime seg-sáb).
+    """
+    norm = normalizar_texto(unidade)
+    return (
+        "LOGARTE" in norm
+        or "LOG ARTE" in norm
+        or "ARTEPECAS" in norm
+        or "ARTE PECAS" in norm
+    )
 
 
 # ============================================================
@@ -92,7 +126,7 @@ def plot_bar_with_labels(
     # define cores (vermelho para valores abaixo do limite, se configurado)
     if highlight_below is not None:
         colors = [
-            "#c0392b" if v < highlight_below else BAR_COLOR
+            BAR_RED if v < highlight_below else BAR_COLOR
             for v in vals
         ]
     else:
@@ -119,25 +153,21 @@ def plot_bar_with_labels(
     # ---------------- DESPINE / ESTILO ----------------
     if horizontal:
         # UNIDADES (barras horizontais):
-        # remove direita, topo e base (linha do eixo X)
         ax.spines["right"].set_visible(False)
         ax.spines["top"].set_visible(False)
         ax.spines["bottom"].set_visible(False)
 
-        # remove ticks e números do eixo X (fica só o nome da unidade no eixo Y)
+        # remove ticks e números do eixo X
         ax.tick_params(axis="x", which="both", length=0)
         ax.set_xticks([])
         ax.set_xticklabels([])
     else:
         # REGIONAIS (barras verticais):
-        # - despine completo
-        # - sem ticks nem labels no eixo Y
         for spine in ax.spines.values():
             spine.set_visible(False)
         ax.set_yticks([])
         ax.set_yticklabels([])
         ax.tick_params(axis="y", which="both", length=0)
-        # no eixo X deixa só os rótulos (nomes das regionais), sem tracinho
         ax.tick_params(axis="x", which="both", length=0)
     # --------------------------------------------------
 
@@ -184,6 +214,91 @@ def plot_bar_with_labels(
 
 
 # ============================================================
+# Gráfico especial: dias possíveis x realizados (barras sobrepostas)
+# ============================================================
+def plot_dds_potencial_real(
+    possiveis: pd.Series,
+    realizados: pd.Series,
+    title: str,
+    figsize=(12, 5),
+    highlight_threshold: float = 69.0,
+):
+    """
+    Gráfico horizontal de barras sobrepostas:
+    - base cinza claro = dias possíveis
+    - barra sobreposta azul/vermelha = dias realizados
+    Cor vermelha quando (realizados / possíveis) * 100 < highlight_threshold.
+    """
+    # Alinha índices
+    realizados = realizados.reindex(possiveis.index).fillna(0)
+
+    poss_vals = pd.to_numeric(possiveis.values, errors="coerce")
+    poss_vals = np.where(np.isfinite(poss_vals), poss_vals, 0.0)
+
+    real_vals = pd.to_numeric(realizados.values, errors="coerce")
+    real_vals = np.where(np.isfinite(real_vals), real_vals, 0.0)
+
+    # Percentuais para definir cor
+    with np.errstate(divide="ignore", invalid="ignore"):
+        perc = np.where(poss_vals > 0, (real_vals / poss_vals) * 100, 0.0)
+
+    colors_real = [
+        BAR_RED if p < highlight_threshold else BAR_COLOR
+        for p in perc
+    ]
+
+    fig, ax = plt.subplots(figsize=figsize)
+
+    y_pos = np.arange(len(possiveis.index))
+
+    max_val = poss_vals.max() if len(poss_vals) else 1.0
+    if max_val <= 0:
+        max_val = 1.0
+
+    # Barra de fundo (dias possíveis)
+    ax.barh(y_pos, poss_vals, color=BAR_GRAY, edgecolor="none")
+
+    # Barra de realizados por cima
+    ax.barh(y_pos, real_vals, color=colors_real, edgecolor="none")
+
+    ax.set_title(title)
+    ax.set_xlabel("")
+    ax.set_ylabel("")
+
+    # Despine: tira topo, direita e base
+    ax.spines["right"].set_visible(False)
+    ax.spines["top"].set_visible(False)
+    ax.spines["bottom"].set_visible(False)
+
+    # Sem ticks no eixo X
+    ax.tick_params(axis="x", which="both", length=0)
+    ax.set_xticks([])
+    ax.set_xticklabels([])
+
+    # Nomes das unidades no eixo Y
+    ax.set_yticks(y_pos)
+    ax.set_yticklabels(possiveis.index)
+
+    # Labels "realizados / possíveis"
+    desloc = max_val * 0.02
+    ax.set_xlim(0, max_val * 1.15)
+
+    for i, (r, p) in enumerate(zip(real_vals, poss_vals)):
+        label = f"{int(r)}/{int(p)}"
+        ax.text(
+            r + desloc,
+            i,
+            label,
+            va="center",
+            ha="left",
+            fontsize=10,
+        )
+
+    plt.tight_layout()
+    return fig
+
+
+# ============================================================
 # Função auxiliar: salva figura em buffer para download
 # ============================================================
 def figure_to_png_bytes(fig) -> bytes:
@@ -207,9 +322,6 @@ def analisar_dds(
         - dds_unico: DataFrame com 1 DDS por dia/unidade
         - figs: dicionário {nome_grafico: figura_matplotlib}
         - data_ini_efetiva, data_fim_efetiva: intervalo efetivamente utilizado
-
-    Pode lançar:
-        ValueError: se faltar coluna, não houver DDS no período, etc.
     """
     # 1) Valida colunas básicas
     obrigatorias = [
@@ -283,7 +395,7 @@ def analisar_dds(
     # ---------------- Gráfico 2: Regional por UNIDADE -----------------
     if not df_regional_presente.empty:
         freq_regional_por_unidade = (
-            df_regional_presente.groupby(COL_UNIDADE).size().sort_index(ascending=False)
+            df_regional_presente.groupby(COL_UNIDADE).size().sort_values(ascending=False)
         )
         figs["participacao_regional_por_unidade"] = plot_bar_with_labels(
             freq_regional_por_unidade,
@@ -314,7 +426,7 @@ def analisar_dds(
     # ---------------- Gráfico 4: Supervisor por UNIDADE ---------------
     if not df_supervisor_presente.empty:
         freq_supervisor_por_unidade = (
-            df_supervisor_presente.groupby(COL_UNIDADE).size().sort_index(ascending=False)
+            df_supervisor_presente.groupby(COL_UNIDADE).size().sort_values(ascending=False)
         )
         figs["participacao_supervisor_por_unidade"] = plot_bar_with_labels(
             freq_supervisor_por_unidade,
@@ -335,7 +447,7 @@ def analisar_dds(
         (sup_dds_por_unidade / total_dds_por_unidade * 100)
         .reindex(total_dds_por_unidade.index, fill_value=0)
         .astype(float)
-        .sort_index(ascending=False)
+        .sort_values(ascending=False)
     )
     if not percentual_sup_por_unidade.empty:
         figs["percentual_supervisor_por_unidade"] = plot_bar_with_labels(
@@ -347,7 +459,7 @@ def analisar_dds(
             figsize=(10, max(5, len(percentual_sup_por_unidade) * 0.3)),
             horizontal=True,
             is_percent=True,
-            highlight_below=60.0,  # 🔴 barras com participação < 60% em vermelho
+            highlight_below=60.0,  # corte de 60% para presença de supervisor
         )
 
     # ---------------- Gráfico 6: % Supervisor por REGIONAL ------------
@@ -359,7 +471,7 @@ def analisar_dds(
         (sup_dds_por_regional / total_dds_por_regional * 100)
         .reindex(total_dds_por_regional.index, fill_value=0)
         .astype(float)
-        .sort_index()
+        .sort_values(ascending=False)
     )
     if not percentual_sup_por_regional.empty:
         figs["percentual_supervisor_por_regional"] = plot_bar_with_labels(
@@ -372,6 +484,70 @@ def analisar_dds(
             horizontal=False,
             is_percent=True,
         )
+
+    # ============================================================
+    # 7 e 8) Potencial de DDS (dias possíveis x realizados)
+    # ============================================================
+
+    # DDS realizados por unidade (já está 1 por dia/unidade)
+    dds_realizados_por_unidade = dds_unico.groupby(COL_UNIDADE).size()
+
+    # Intervalo completo de dias
+    todos_os_dias = pd.date_range(data_ini, data_fim, freq="D")
+    dias_seg_a_sex = todos_os_dias[todos_os_dias.weekday < 5].size  # 0-4
+    dias_seg_a_sab = todos_os_dias[todos_os_dias.weekday < 6].size  # 0-5
+
+    # Dias possíveis por unidade
+    unidades_idx = dds_realizados_por_unidade.index
+    possiveis_dds_vals = []
+    for unidade in unidades_idx:
+        if unidade_e_logarte_ou_artepecas(unidade):
+            possiveis_dds_vals.append(dias_seg_a_sex)
+        else:
+            possiveis_dds_vals.append(dias_seg_a_sab)
+
+    possiveis_dds_por_unidade = pd.Series(
+        possiveis_dds_vals,
+        index=unidades_idx,
+        name="dias_possiveis_dds",
+    )
+
+    # Ordena dias possíveis x realizados pela quantidade REALIZADA (decrescente)
+    dds_realizados_sorted = dds_realizados_por_unidade.sort_values(ascending=False)
+    possiveis_alinhado = possiveis_dds_por_unidade.reindex(dds_realizados_sorted.index)
+
+    figs["dias_possiveis_x_realizados_por_unidade"] = plot_dds_potencial_real(
+        possiveis_alinhado,
+        dds_realizados_sorted,
+        title="Dias realizados de DDS x dias possíveis",
+        figsize=(10, max(5, len(possiveis_alinhado) * 0.3)),
+        highlight_threshold=60.0,
+    )
+
+    # Proporção de DDS realizados sobre dias possíveis
+    with np.errstate(divide="ignore", invalid="ignore"):
+        proporcao_dds_por_unidade = (
+            (dds_realizados_sorted / possiveis_alinhado) * 100
+        )
+
+    proporcao_dds_por_unidade = (
+        proporcao_dds_por_unidade.replace([np.inf, -np.inf], np.nan)
+        .fillna(0.0)
+        .astype(float)
+        .sort_values(ascending=False)
+    )
+
+    figs["proporcao_dds_realizados_por_unidade"] = plot_bar_with_labels(
+        proporcao_dds_por_unidade,
+        title="Proporção de DDS realizados em relação aos dias possíveis",
+        xlabel="",
+        ylabel="",
+        rotation=0,
+        figsize=(10, max(5, len(proporcao_dds_por_unidade) * 0.3)),
+        horizontal=True,
+        is_percent=True,
+        highlight_below=60.0,  # <60% em vermelho
+    )
 
     return dds_unico, figs, data_ini, data_fim
 
