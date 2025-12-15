@@ -557,9 +557,9 @@ def analisar_dds(
     pres_gt = float(dias_participacao_gt)
     pres_gt = max(0.0, min(pres_gt, poss_gt))
 
+    # GT: dias possíveis para DDS = dias de DDS realizados
     poss_gt_series = pd.Series([poss_gt], index=["TECNOLOGIA DO CONCRETO"])
-    # Para GT, consideramos que DDS realizados = dias em que GT participou
-    dds_gt_series = pd.Series([pres_gt], index=["TECNOLOGIA DO CONCRETO"])
+    dds_gt_series = pd.Series([poss_gt], index=["TECNOLOGIA DO CONCRETO"])
     pres_gt_series = pd.Series([pres_gt], index=["TECNOLOGIA DO CONCRETO"])
 
     # Combina unidades + R1/R2 + GT para os gráficos de liderança
@@ -578,7 +578,7 @@ def analisar_dds(
     dds_lider = dds_lider.reindex(lider_lider.index)
 
     if not lider_lider.empty:
-        # 2) Participação da liderança x dias possíveis (contagem)
+        # 2) Participação da liderança x dias (contagem)
         figs["participacao_supervisor_por_unidade_contagem"] = plot_supervisor_potencial_real_counts(
             poss_lider,
             dds_lider,
@@ -588,7 +588,7 @@ def analisar_dds(
             highlight_threshold=60.0,
         )
 
-        # 3) Participação da liderança x dias possíveis (%)
+        # 3) Participação da liderança x dias (%)
         figs["participacao_supervisor_por_unidade_percentual_camadas"] = plot_supervisor_potencial_real(
             poss_lider,
             dds_lider,
@@ -602,30 +602,53 @@ def analisar_dds(
     base_regional = dds_sem_comercial.copy()
     reg_norm_sem_full = reg_norm.loc[base_regional.index]
 
+    # Considera apenas R1, R2, R3
     mask_r123 = reg_norm_sem_full.isin(["R1", "R2", "R3"])
     base_r123 = base_regional[mask_r123]
 
-    total_dds_por_regional = (
-        base_r123.groupby(COL_REGIONAL).size()
-        if not base_r123.empty
-        else pd.Series(dtype=int)
+    # Dias com DDS + supervisor por regional (1 por dia/regional)
+    sup_mask_r123 = (
+        sup_flag_sem.reindex(base_regional.index, fill_value=False)
+        & mask_r123
     )
-
-    sup_mask_r123 = sup_flag_sem.reindex(base_regional.index, fill_value=False) & mask_r123
     sup_r123 = base_regional[sup_mask_r123]
 
     sup_dds_por_regional = (
-        sup_r123.groupby(COL_REGIONAL).size()
+        sup_r123
+        .drop_duplicates(["data", COL_REGIONAL])
+        .groupby(COL_REGIONAL)
+        .size()
         if not sup_r123.empty
         else pd.Series(dtype=int)
     )
 
-    percentual_sup_por_regional = (
-        (sup_dds_por_regional / total_dds_por_regional * 100)
-        .reindex(total_dds_por_regional.index, fill_value=0)
-        .astype(float)
-        .sort_values(ascending=False)
-    )
+    # Dias possíveis das regionais (R1, R2, R3) vindos da tabela editável
+    reg_labels_all = ["R1", "R2", "R3"]
+
+    if not df_dias_regional.empty and "Regional" in df_dias_regional.columns:
+        dias_possiveis_reg = (
+            df_dias_regional
+            .set_index("Regional")["Dias possíveis"]
+            .astype(float)
+            .reindex(reg_labels_all)
+        )
+    else:
+        dias_possiveis_reg = pd.Series(0.0, index=reg_labels_all)
+
+    dias_possiveis_reg = dias_possiveis_reg.fillna(0.0)
+    sup_dds_reg = sup_dds_por_regional.reindex(reg_labels_all).astype(float).fillna(0.0)
+
+    with np.errstate(divide="ignore", invalid="ignore"):
+        perc_sup_raw = np.where(
+            dias_possiveis_reg > 0,
+            (sup_dds_reg / dias_possiveis_reg) * 100,
+            0.0,
+        )
+
+    percentual_sup_por_regional = pd.Series(perc_sup_raw, index=reg_labels_all)
+    mask_valid_reg = dias_possiveis_reg > 0
+    percentual_sup_por_regional = percentual_sup_por_regional[mask_valid_reg]
+    percentual_sup_por_regional = percentual_sup_por_regional.sort_values(ascending=False)
 
     if not percentual_sup_por_regional.empty:
         figs["percentual_supervisor_por_regional"] = plot_bar_with_labels(
@@ -671,9 +694,9 @@ def analisar_dds(
     poss_reg_all = poss_reg_all.fillna(0.0)
     dds_reg_all = dds_reg_dias_all.reindex(["R1", "R2"]).astype(float).fillna(0.0)
 
-    # GT
+    # GT – realizados = possíveis
     poss_gt_all = poss_gt_series
-    dds_gt_all = pd.Series([pres_gt], index=["TECNOLOGIA DO CONCRETO"])
+    dds_gt_all = poss_gt_series
 
     poss_totais = pd.concat([poss_unid_sem_csc, poss_reg_all, poss_gt_all])
     dds_totais = pd.concat([dds_unid_sem_csc, dds_reg_all, dds_gt_all])
@@ -726,7 +749,7 @@ Este app lê a planilha de **SSMA**, filtra os **DDS** e gera gráficos de:
     st.sidebar.header("⚙️ Arquivo e período")
 
     uploaded_file = st.sidebar.file_uploader(
-        "1) Envie a planilha de SSMA (.xlsx)", type=["xlsx", "xls"]
+        "Envie a planilha de SSMA (.xlsx)", type=["xlsx", "xls"]
     )
 
     if uploaded_file is None:
@@ -751,7 +774,7 @@ Este app lê a planilha de **SSMA**, filtra os **DDS** e gera gráficos de:
         st.error("Não foi possível converter a coluna de hora de conclusão para data.")
         return
 
-    st.sidebar.markdown("### 2) Período de análise")
+    st.sidebar.markdown("### Período de análise")
     data_ini_input = st.sidebar.date_input(
         "Data inicial",
         value=data_min,
@@ -776,7 +799,7 @@ Este app lê a planilha de **SSMA**, filtra os **DDS** e gera gráficos de:
         st.error(f"Erro ao preparar dados de DDS: {e}")
         return
 
-    st.markdown("## 3) Ajustar dias possíveis por unidade")
+    st.markdown("## Ajustar dias possíveis por unidade")
 
     unidades = (
         dds_preview[COL_UNIDADE]
@@ -816,7 +839,7 @@ Este app lê a planilha de **SSMA**, filtra os **DDS** e gera gráficos de:
     )
 
     # Dias possíveis para regionais (R1 / R2 / R3)
-    st.markdown("## 4) Ajustar dias possíveis para Regionais (R1 / R2 / R3)")
+    st.markdown("## Ajustar dias possíveis para Regionais")
 
     df_regional_default = pd.DataFrame(
         [
@@ -837,7 +860,7 @@ Este app lê a planilha de **SSMA**, filtra os **DDS** e gera gráficos de:
     )
 
     # Parâmetros do Gerente de Tecnologia
-    st.markdown("## 5) Parâmetros do Gerente de Tecnologia")
+    st.markdown("## Parâmetros do Gerente de Tecnologia")
 
     col1, col2 = st.columns(2)
     with col1:
@@ -856,7 +879,7 @@ Este app lê a planilha de **SSMA**, filtra os **DDS** e gera gráficos de:
         )
 
     # Botão de gerar
-    st.markdown("## 6) Gerar gráficos")
+    st.markdown("## Gerar gráficos")
     gerar = st.button("Gerar gráficos", type="primary")
 
     if not gerar:
