@@ -496,7 +496,9 @@ def analisar_dds(
             horizontal=False,
         )
 
-    # 2 e 3) Liderança por unidade + R1/R2 + GT (gráficos de participação vs dias possíveis)
+    # -------------------------------
+    # 2 e 3) Liderança (unidades + R1/R2 + GT)
+    # -------------------------------
 
     # Unidades (sem COMERCIAL)
     poss_unit = possiveis_dds_por_unidade.reindex(
@@ -516,9 +518,7 @@ def analisar_dds(
     )
     lider_unit = sup_dds_por_unidade.reindex(poss_unit.index).astype(float).fillna(0.0)
 
-    # Por regional (R1, R2)
-
-    # Dias com DDS por regional (independente de presença do regional)
+    # Por regional (R1, R2) – DDS por dia e presença do regional
     base_dds_reg = dds_sem_comercial[~is_csc_sem].dropna(subset=[COL_REGIONAL]).copy()
     dds_por_regional_dias = (
         base_dds_reg
@@ -527,7 +527,6 @@ def analisar_dds(
         .size()
     )
 
-    # Dias em que R1/R2 estiveram presentes em algum DDS
     base_pres_reg = dds_sem_comercial[
         dds_sem_comercial["regional_presente"]
         & (~is_csc_sem)
@@ -559,45 +558,43 @@ def analisar_dds(
     pres_gt = max(0.0, min(pres_gt, poss_gt))
 
     poss_gt_series = pd.Series([poss_gt], index=["TECNOLOGIA DO CONCRETO"])
-    # Para GT, consideramos que todos os dias possíveis são dias "com DDS" no nível agregado
-    dds_gt_series = pd.Series([poss_gt], index=["TECNOLOGIA DO CONCRETO"])
-    # E os dias de participação vêm apenas do valor digitado
+    # Para GT, consideramos que DDS realizados = dias em que GT participou
+    dds_gt_series = pd.Series([pres_gt], index=["TECNOLOGIA DO CONCRETO"])
     pres_gt_series = pd.Series([pres_gt], index=["TECNOLOGIA DO CONCRETO"])
 
-    # Combina unidades + regionais (R1/R2) + GT
-    poss_comb = pd.concat([poss_unit, poss_reg, poss_gt_series])
-    dds_comb = pd.concat([dds_unit, dds_reg, dds_gt_series])
-    lider_comb = pd.concat([lider_unit, pres_reg, pres_gt_series])
+    # Combina unidades + R1/R2 + GT para os gráficos de liderança
+    poss_lider = pd.concat([poss_unit, poss_reg, poss_gt_series])
+    dds_lider = pd.concat([dds_unit, dds_reg, dds_gt_series])
+    lider_lider = pd.concat([lider_unit, pres_reg, pres_gt_series])
 
-    # remove linhas sem dias possíveis
-    mask_valid = poss_comb.fillna(0) > 0
-    poss_comb = poss_comb[mask_valid]
-    dds_comb = dds_comb[mask_valid]
-    lider_comb = lider_comb[mask_valid]
+    mask_valid_lider = poss_lider.fillna(0) > 0
+    poss_lider = poss_lider[mask_valid_lider]
+    dds_lider = dds_lider[mask_valid_lider]
+    lider_lider = lider_lider[mask_valid_lider]
 
-    # ordena pela quantidade de dias com liderança
-    lider_comb = lider_comb.sort_values(ascending=False)
-    poss_comb = poss_comb.reindex(lider_comb.index)
-    dds_comb = dds_comb.reindex(lider_comb.index)
+    # Ordena pela quantidade de dias com liderança
+    lider_lider = lider_lider.sort_values(ascending=False)
+    poss_lider = poss_lider.reindex(lider_lider.index)
+    dds_lider = dds_lider.reindex(lider_lider.index)
 
-    if not lider_comb.empty:
-        # 2) Participação da liderança x dias possíveis
+    if not lider_lider.empty:
+        # 2) Participação da liderança x dias possíveis (contagem)
         figs["participacao_supervisor_por_unidade_contagem"] = plot_supervisor_potencial_real_counts(
-            poss_comb,
-            dds_comb,
-            lider_comb,
-            title="Participação da liderança x dias possíveis",
-            figsize=(10, max(5, len(poss_comb) * 0.3)),
+            poss_lider,
+            dds_lider,
+            lider_lider,
+            title="Participação da liderança x dias",
+            figsize=(10, max(5, len(poss_lider) * 0.3)),
             highlight_threshold=60.0,
         )
 
         # 3) Participação da liderança x dias possíveis (%)
         figs["participacao_supervisor_por_unidade_percentual_camadas"] = plot_supervisor_potencial_real(
-            poss_comb,
-            dds_comb,
-            lider_comb,
-            title="Participação da liderança x dias possíveis (%)",
-            figsize=(10, max(5, len(poss_comb) * 0.3)),
+            poss_lider,
+            dds_lider,
+            lider_lider,
+            title="Participação da liderança x dias (%)",
+            figsize=(10, max(5, len(poss_lider) * 0.3)),
             highlight_threshold=60.0,
         )
 
@@ -642,11 +639,9 @@ def analisar_dds(
             is_percent=True,
         )
 
-    # 1) DDS realizados x dias possíveis (unidade / regional / GT)
-    #    - inclui COMERCIAL
-    #    - remove CSC (no nome da unidade)
-    #    - regionais: R1 / R2
-    #    - GT com barra própria
+    # -------------------------------
+    # 1) DDS realizados x dias possíveis (unidade / R1 / R2 / GT)
+    # -------------------------------
 
     unidades_index = dds_realizados_por_unidade_all.index.to_series()
     mask_csc_unidade = unidades_index.astype(str).map(normalizar_texto).str.contains(
@@ -656,7 +651,7 @@ def analisar_dds(
 
     poss_unid_sem_csc = possiveis_dds_por_unidade.reindex(dds_unid_sem_csc.index).astype(float)
 
-    # Regionais R1 / R2 – dias com DDS
+    # Regionais R1 / R2 – dias com DDS na regional
     dds_reg_dias_all = (
         dds_unico[reg_norm.isin(["R1", "R2"])]
         .drop_duplicates(["data", COL_REGIONAL])
@@ -680,26 +675,27 @@ def analisar_dds(
     poss_gt_all = poss_gt_series
     dds_gt_all = pd.Series([pres_gt], index=["TECNOLOGIA DO CONCRETO"])
 
-    poss_comb_all = pd.concat([poss_unid_sem_csc, poss_reg_all, poss_gt_all])
-    dds_comb_all = pd.concat([dds_unid_sem_csc, dds_reg_all, dds_gt_all])
+    poss_totais = pd.concat([poss_unid_sem_csc, poss_reg_all, poss_gt_all])
+    dds_totais = pd.concat([dds_unid_sem_csc, dds_reg_all, dds_gt_all])
 
-    mask_valid2 = poss_comb_all.fillna(0) > 0
-    poss_comb_all = poss_comb_all[mask_valid2]
-    dds_comb_all = dds_comb_all[mask_valid2]
+    mask_valid2 = poss_totais.fillna(0) > 0
+    poss_totais = poss_totais[mask_valid2]
+    dds_totais = dds_totais[mask_valid2]
 
     with np.errstate(divide="ignore", invalid="ignore"):
-        perc_real_all = dds_comb_all / poss_comb_all
+        perc_real_all = dds_totais / poss_totais
     perc_real_all = perc_real_all.replace([np.inf, -np.inf], 0).fillna(0)
 
-    idx_sorted = perc_real_all.sort_values(ascending=False).index
+    # ordem crescente de cima para baixo
+    idx_sorted = perc_real_all.sort_values(ascending=True).index
 
-    poss_sorted_all = poss_comb_all.reindex(idx_sorted)
-    dds_sorted_all = dds_comb_all.reindex(idx_sorted)
+    poss_sorted_all = poss_totais.reindex(idx_sorted)
+    dds_sorted_all = dds_totais.reindex(idx_sorted)
 
     figs["dias_possiveis_x_realizados_por_unidade"] = plot_dds_potencial_real(
         poss_sorted_all,
         dds_sorted_all,
-        title="DDS realizados x dias possíveis",
+        title="DDS realizados x dias",
         figsize=(10, max(5, len(poss_sorted_all) * 0.3)),
         highlight_threshold=60.0,
     )
